@@ -3,13 +3,12 @@ import plotly.graph_objects as go
 from typing import Dict, Any
 from src.pipelines.base_pipeline import BaseDataPipeline
 
-
 class ReleasedPipeline(BaseDataPipeline):
     """
-    Pipeline for analyzing released Pokémon.
+    Pipeline for analyzing Pokémon release events.
 
-    Helps understand which species are discarded most often
-    and the quality (IVs) of discarded Pokémon.
+    Focuses on understanding player behavior regarding which Pokémon are discarded,
+    analyzing the genetic quality (IVs) of released Pokémon and ownership duration.
     """
 
     def __init__(self):
@@ -17,71 +16,55 @@ class ReleasedPipeline(BaseDataPipeline):
 
     def _feature_engineering(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Ensures numeric types for IVs and levels.
+        Calculates genetic quality metrics and ownership duration.
+
+        Args:
+            df (pd.DataFrame): Raw release data.
+
+        Returns:
+            pd.DataFrame: Augmented DataFrame with IV percentages and ownership time.
         """
-        if df.empty: return df
+        # Calculate IV Totals and Percentage
+        iv_cols = [c for c in df.columns if c.startswith('ivs.')]
+        if iv_cols:
+            df[iv_cols] = df[iv_cols].fillna(0)
+            df['iv_total'] = df[iv_cols].sum(axis=1)
+            # Max stats: 6 stats * 31 IVs = 186
+            df['iv_percentage'] = (df['iv_total'] / 186) * 100
 
-        # Handle missing string values
-        if 'species' in df.columns:
-            df['species'] = df['species'].astype(str).fillna("Unknown")
-
-        # Parse IV Percentage
-        if 'iv_percentage' in df.columns:
-            df['iv_percentage'] = pd.to_numeric(df['iv_percentage'], errors='coerce').fillna(0)
-
-        # Parse Level
-        if 'level' in df.columns:
-            df['level'] = pd.to_numeric(df['level'], errors='coerce').fillna(0)
+        # Convert ownership time from milliseconds to minutes
+        if 'timeHeldCalculated' in df.columns:
+            df['minutes_owned'] = df['timeHeldCalculated'] / 60000
 
         return df
 
     def _generate_visualization_data(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Visualizes Top Released Species and IV Distribution.
+        Generates histograms for released Pokémon quality.
+
+        Args:
+            df (pd.DataFrame): Processed data.
+
+        Returns:
+            Dict[str, Any]: JSON-serialized Plotly figures.
         """
         plots = {}
-        print(f"--- [DEBUG] RELEASED PIPELINE: Processing {len(df)} rows ---")
 
-        # Top 10 Released Species
-        if 'species' in df.columns:
-            counts = df['species'].value_counts().head(10)
-
-            x_data = counts.index.tolist()
-            y_data = counts.values.tolist()
-
-            if x_data:
-                fig = go.Figure(data=[go.Bar(
-                    x=x_data,
-                    y=y_data,
-                    marker_color='#e74c3c',
-                    text=y_data,
-                    textposition='auto'
-                )])
-                fig.update_layout(
-                    title="Top 10 Released Pokémon Species",
-                    xaxis_title="Species",
-                    yaxis_title="Count",
-                    template="plotly_white"
-                )
-                plots['top_released'] = fig.to_json()
-
-        # IV Distribution of Released Pokemon
+        # Visualization: Distribution of Released IVs
         if 'iv_percentage' in df.columns:
-            iv_data = df['iv_percentage'].tolist()
+            # Ensure native Python list of floats for serialization
+            clean_ivs = pd.to_numeric(df['iv_percentage'], errors='coerce').dropna().tolist()
 
-            if iv_data:
-                fig2 = go.Figure(data=[go.Histogram(
-                    x=iv_data,
-                    nbinsx=20,
-                    marker_color='#3498db',
-                    name='IV %'
-                )])
-                fig2.update_layout(
-                    title="IV Percentage Distribution of Released Pokémon",
-                    xaxis_title="IV Percentage (0-100%)",
-                    yaxis_title="Count",
-                    template="plotly_white"
-                )
-                plots['iv_distribution'] = fig2.to_json()
+            fig = go.Figure(data=[go.Histogram(
+                x=clean_ivs,
+                marker_color='brown',
+                xbins=dict(start=0, end=100, size=5)
+            )])
+            fig.update_layout(
+                title="Distribution of Released Pokémon IVs (The 'Discarded')",
+                xaxis_title="IV Percentage",
+                yaxis_title="Frequency"
+            )
+            plots['released_ivs'] = fig.to_json()
 
         return plots

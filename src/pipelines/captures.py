@@ -3,10 +3,12 @@ import plotly.graph_objects as go
 from typing import Dict, Any
 from src.pipelines.base_pipeline import BaseDataPipeline
 
-
 class CapturesPipeline(BaseDataPipeline):
     """
     Pipeline for analyzing Pokémon capture events.
+
+    Calculates genetic quality (IVs) of captured Pokémon and identifies the
+    most popular species caught by players.
     """
 
     def __init__(self):
@@ -14,60 +16,84 @@ class CapturesPipeline(BaseDataPipeline):
 
     def _feature_engineering(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Cleans capture data strings to ensure valid categories.
-        """
-        if df.empty: return df
+        Calculates Total IVs, IV Percentage, and Shiny flags.
 
-        # Handle missing string values
-        if 'pokemon' in df.columns:
-            df['pokemon'] = df['pokemon'].astype(str).fillna("Unknown")
-        if 'biome' in df.columns:
-            df['biome'] = df['biome'].astype(str).fillna("Unknown")
+        Args:
+            df (pd.DataFrame): Raw capture data.
+
+        Returns:
+            pd.DataFrame: DataFrame with calculated 'iv_percentage' and 'is_shiny'.
+        """
+        # Calculate IV Percentage if columns exist
+        iv_cols = [c for c in df.columns if c.startswith('ivs.')]
+        if iv_cols:
+            # Fill NaN with 0 to ensure valid numeric operations
+            df[iv_cols] = df[iv_cols].fillna(0)
+            df['iv_total'] = df[iv_cols].sum(axis=1)
+            # Max possible IV total is 186
+            df['iv_percentage'] = (df['iv_total'] / 186) * 100
+
+        # Create binary Shiny flag (1/0)
+        if 'shiny' in df.columns:
+            df['is_shiny'] = df['shiny'].apply(lambda x: 1 if x else 0)
 
         return df
 
     def _generate_visualization_data(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Generates capture insights: Top Species and Top Biomes.
+        Generates visualizations for capture analysis.
+
+        Visualizations:
+        1. Distribution of Pokémon Quality (IV %).
+        2. Top 10 Most Captured Pokémon.
+
+        Args:
+            df (pd.DataFrame): Processed capture data.
+
+        Returns:
+            Dict[str, Any]: JSON-serialized Plotly figures.
         """
         plots = {}
-        print(f"--- [DEBUG] CAPTURES PIPELINE: Processing {len(df)} rows ---")
 
-        # Top 10 Captured Pokémon
-        col_pokemon = 'pokemon' if 'pokemon' in df.columns else 'species'
+        # Visualization: Distribution of Pokémon Quality (IV %)
+        if 'iv_percentage' in df.columns:
+            # Convert to native list and drop NaNs for safe serialization
+            clean_ivs = pd.to_numeric(df['iv_percentage'], errors='coerce').dropna().tolist()
 
-        if col_pokemon in df.columns:
-            counts = df[col_pokemon].value_counts().head(10)
+            fig = go.Figure(data=[go.Histogram(
+                x=clean_ivs,
+                marker_color='purple',
+                opacity=0.75,
+                xbins=dict(start=0, end=100, size=5)
+            )])
+            fig.update_layout(
+                title="Distribution of Pokémon Quality (IV %)",
+                xaxis_title="IV Percentage (0-100)",
+                yaxis_title="Count",
+                bargap=0.1
+            )
+            plots['iv_dist'] = fig.to_json()
 
-            x_data = counts.index.tolist()
-            y_data = counts.values.tolist()
+        # Visualization: Top 10 Most Captured Pokémon
+        if 'species' in df.columns:
+            # Count frequencies and select Top 10
+            top_species = df['species'].value_counts().head(10)
 
-            if x_data:
-                fig = go.Figure(data=[go.Bar(
-                    x=x_data,
-                    y=y_data,
-                    marker_color='#e74c3c',
-                    text=y_data,
-                    textposition='auto'
-                )])
-                fig.update_layout(title="Top 10 Captured Pokémon", template="plotly_white")
-                plots['top_captures'] = fig.to_json()
+            # Extract native lists for Plotly
+            species_names = top_species.index.tolist()
+            species_counts = top_species.values.tolist()
 
-        # Captures by Biome
-        if 'biome' in df.columns:
-            counts = df['biome'].value_counts().head(10)
-            x_data = counts.index.tolist()
-            y_data = counts.values.tolist()
-
-            if x_data:
-                fig2 = go.Figure(data=[go.Bar(
-                    x=x_data,
-                    y=y_data,
-                    marker_color='#2ecc71',
-                    text=y_data,
-                    textposition='auto'
-                )])
-                fig2.update_layout(title="Top 10 Biomes for Captures", template="plotly_white")
-                plots['biome_dist'] = fig2.to_json()
+            fig2 = go.Figure(data=[go.Bar(
+                x=species_counts,
+                y=species_names,
+                orientation='h',  # Horizontal bars
+                marker=dict(color='teal')
+            )])
+            fig2.update_layout(
+                title="Top 10 Most Captured Pokémon",
+                xaxis_title="Capture Count",
+                yaxis=dict(autorange="reversed")  # Invert axis so #1 is at the top
+            )
+            plots['top_captured'] = fig2.to_json()
 
         return plots

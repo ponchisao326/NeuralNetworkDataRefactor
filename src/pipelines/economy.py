@@ -1,12 +1,15 @@
 import pandas as pd
+import re
 import plotly.graph_objects as go
 from typing import Dict, Any
 from src.pipelines.base_pipeline import BaseDataPipeline
 
-
 class EconomyPipeline(BaseDataPipeline):
     """
-    Pipeline for tracking server economy (GTS Transactions).
+    Pipeline for analyzing Global Trade System (GTS) transactions.
+
+    Parses transaction descriptions to extract product details (Pokémon name, level)
+    and analyzes market trends such as pricing correlations and server volume.
     """
 
     def __init__(self):
@@ -14,48 +17,120 @@ class EconomyPipeline(BaseDataPipeline):
 
     def _feature_engineering(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Standardizes transaction amounts to numeric format.
-        """
-        if df.empty: return df
+        Parses item descriptions and normalizes price data.
 
-        # Normalize 'price' or 'amount' columns
+        Extracts the Pokémon species and level from the raw description string
+        (e.g., "Pikachu Lvl5") using regex.
+
+        Args:
+            df (pd.DataFrame): Raw transaction data.
+
+        Returns:
+            pd.DataFrame: DataFrame with extracted product names and numeric levels.
+        """
+        def parse_desc(row):
+            """Helper to extract Name and Level from description string."""
+            desc = str(row.get('description', ''))
+            itype = row.get('itemType', 'ITEM')
+            name = desc
+            lvl = 0
+
+            if itype == 'POKEMON':
+                # Regex to extract "Name LvlX" pattern
+                match = re.search(r'(.+)\s+Lvl(\d+)', desc)
+                if match:
+                    name = match.group(1).strip()
+                    lvl = int(match.group(2))
+            return pd.Series([name, lvl])
+
+        # Apply parsing logic
+        df[['product_name', 'level']] = df.apply(parse_desc, axis=1)
+
+        # Ensure numeric types for price and level
         if 'price' in df.columns:
-            df['amount'] = pd.to_numeric(df['price'], errors='coerce').fillna(0)
-        elif 'amount' in df.columns:
-            df['amount'] = pd.to_numeric(df['amount'], errors='coerce').fillna(0)
+            df['price'] = pd.to_numeric(df['price'], errors='coerce').fillna(0)
+
+        if 'listingDurationMs' in df.columns:
+            df['hours_on_market'] = pd.to_numeric(df['listingDurationMs'], errors='coerce').fillna(0) / 3.6e6
 
         return df
 
     def _generate_visualization_data(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Visualizes economic activity: Price distribution and Total Volume.
+        Generates economic market charts.
+
+        Visualizations:
+        1. Top 10 Most Expensive Pokémon.
+        2. Price vs. Level Correlation Scatter Plot.
+        3. Transaction Volume per Server.
+
+        Args:
+            df (pd.DataFrame): Processed economic data.
+
+        Returns:
+            Dict[str, Any]: JSON-serialized Plotly figures.
         """
         plots = {}
-        print(f"--- [DEBUG] ECONOMY PIPELINE: Processing {len(df)} rows ---")
 
-        # Price Distribution Histogram
-        if 'amount' in df.columns:
-            # Filter positive transactions
-            data_clean = df[df['amount'] > 0]['amount'].tolist()
+        # Filter only Pokémon sales for cleaner analysis
+        pokemon_sales = df[df['itemType'] == 'POKEMON'].copy() if 'itemType' in df.columns else df.copy()
 
-            if data_clean:
-                fig = go.Figure(data=[go.Histogram(
-                    x=data_clean,
-                    nbinsx=20,
-                    marker_color='#f1c40f',
-                    name='Prices'
-                )])
-                fig.update_layout(title="Transaction Value Distribution", template="plotly_white")
-                plots['price_dist'] = fig.to_json()
+        # Visualization: Top 10 Most Expensive Species (Avg Price)
+        if not pokemon_sales.empty and 'product_name' in pokemon_sales.columns and 'price' in pokemon_sales.columns:
+            avg_prices = pokemon_sales.groupby('product_name')['price'].mean().sort_values(ascending=False).head(10)
 
-        # Total Volume Indicator
-        if 'amount' in df.columns:
-            total = sum(df['amount'].tolist())
-            fig2 = go.Figure(go.Indicator(
-                mode="number",
-                value=total,
-                title={"text": "Total Economy Volume"}
-            ))
-            plots['total_volume'] = fig2.to_json()
+            fig = go.Figure(data=[go.Bar(
+                x=avg_prices.values.tolist(),
+                y=avg_prices.index.tolist(),
+                orientation='h',
+                marker=dict(color='gold')
+            )])
+            fig.update_layout(
+                title="Top 10 Most Expensive Pokémon (Avg Price)",
+                xaxis_title="Average Price",
+                yaxis=dict(autorange="reversed")
+            )
+            plots['top_expensive'] = fig.to_json()
+
+        # Visualization: Price vs Level Correlation
+        if not pokemon_sales.empty and 'level' in pokemon_sales.columns and 'price' in pokemon_sales.columns:
+            scatter_df = pokemon_sales[['level', 'price', 'product_name']].dropna()
+
+            fig2 = go.Figure(data=[go.Scatter(
+                x=scatter_df['level'].tolist(),
+                y=scatter_df['price'].tolist(),
+                mode='markers',
+                marker=dict(
+                    size=10,
+                    color=scatter_df['price'].tolist(),  # Color mapping by price
+                    colorscale='Viridis',
+                    showscale=True,
+                    colorbar=dict(title="Price")
+                ),
+                text=scatter_df['product_name'].tolist(),  # Tooltip
+                hovertemplate='<b>%{text}</b><br>Level: %{x}<br>Price: %{y}<extra></extra>'
+            )])
+            fig2.update_layout(
+                title="Correlation: Price vs Level",
+                xaxis_title="Level",
+                yaxis_title="Price"
+            )
+            plots['price_scatter'] = fig2.to_json()
+
+        # Visualization: Transactions Volume by Server
+        if 'server_id' in df.columns:
+            server_counts = df['server_id'].value_counts()
+
+            fig3 = go.Figure(data=[go.Bar(
+                x=server_counts.index.tolist(),
+                y=server_counts.values.tolist(),
+                marker_color='cornflowerblue'
+            )])
+            fig3.update_layout(
+                title="Transactions Volume by Server",
+                xaxis_title="Server ID",
+                yaxis_title="Transaction Count"
+            )
+            plots['server_volume'] = fig3.to_json()
 
         return plots
