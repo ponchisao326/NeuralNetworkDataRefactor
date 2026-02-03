@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pixelmon AI Data Report</title>
+
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f4f7f6;
+            padding: 20px;
+            color: #333;
+        }
+        h1 { text-align: center; color: #2c3e50; margin-bottom: 40px; }
+        section {
+            background: white;
+            margin-bottom: 30px;
+            padding: 25px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h2 {
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+            color: #2c3e50;
+            margin-top: 0;
+        }
+        .chart-container {
+            margin-bottom: 40px;
+            padding: 10px;
+            min-height: 500px; /* Asegura espacio aunque el gráfico tarde en cargar */
+        }
+        .error-msg { color: red; font-weight: bold; background: #ffeeee; padding: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Pixelmon AI - Data Pipeline Report</h1>
+
+    {% for section_name, plots in all_data.items() %}
+    <section>
+        <h2>{{ section_name|upper }}</h2>
+        {% if plots %}
+            {% for plot_id, plot_json in plots.items() %}
+            <div class="chart-container">
+                <div id="{{ section_name }}_{{ plot_id }}" style="height: 500px;"></div>
+
+                <script>
+                    (function() {
+                        var divId = "{{ section_name }}_{{ plot_id }}";
+                        try {
+                            // Datos inyectados desde Python
+                            var graphData = {{ plot_json | safe }};
+
+                            // Configuración de layout
+                            var layout = graphData.layout || {};
+                            layout.responsive = true;
+                            layout.autosize = true;
+
+                            // Dibujar gráfico con la librería v2.x
+                            Plotly.newPlot(divId, graphData.data, layout, {responsive: true});
+
+                        } catch (err) {
+                            console.error("FATAL ERROR drawing " + divId + ":", err);
+                            // Mostrar error en la pantalla si falla
+                            document.getElementById(divId).innerHTML =
+                                "<div class='error-msg'>Error visualizando gráfico: " + err.message + "</div>";
+                        }
+                    })();
+                </script>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p>No visualization data available for this section.</p>
+        {% endif %}
+    </section>
+    {% endfor %}
+
+    <script>
+        console.log("Reporte cargado. Versión de Plotly:", Plotly.version);
+    </script>
+</body>
+</html>
